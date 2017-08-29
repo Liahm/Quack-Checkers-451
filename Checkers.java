@@ -11,31 +11,175 @@ import java.util.Queue;
 
 class Checkers
 {
+	String url = "mc.drexel.rocks";
+	int port = 28000;
+	Queue<String> messages, inputs;
+	PrintWriter writer;
+	
 	public static void main(String[] args)
+	{
+		new Checkers(args).start();
+	}
+	
+	private Checkers(String[] args)
 	{
 		try
 		{
-			Socket s = new Socket("mc.drexel.rocks", 28000);
-			BufferedReader reader = new BufferedReader(new InputStreamReader(s.getInputStream()));
-			PrintWriter writer = new PrintWriter(s.getOutputStream(), true);
+			if(args.length > 0)
+			{
+				url = args[0].split(":")[0];
+				if(args[0].split(":").length > 1)
+					port = Integer.parseInt(args[0].split(":")[1]);
+			}
 			
-			writer.println("a");
-			System.out.println(reader.readLine());
-			writer.println("duck");
-			System.out.println(reader.readLine());
-			writer.println("test");
-			System.out.println(reader.readLine());
+			Socket s = new Socket(url, port);
 			
-			Thread.sleep(15000);
+			messages = new LinkedList<String>();
+			inputs = new LinkedList<String>();
+			writer = new PrintWriter(s.getOutputStream(), true);
 			
-			writer.println("delayed");
-			System.out.println(reader.readLine());
+			//read user input
+			new Thread(new Runnable()
+			{
+				public void run()
+				{
+					BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+					try
+					{
+						for(String line = reader.readLine(); line != null; line = reader.readLine())
+							synchronized(messages)
+							{
+								inputs.add(line);
+							}
+					}
+					catch(IOException e)
+					{
+						e.printStackTrace();
+					}
+				}
+			}).start();
 			
-			s.close();
+			//read server messages
+			new Thread(new Runnable()
+			{
+				public void run()
+				{
+					try
+					{
+						BufferedReader reader = new BufferedReader(new InputStreamReader(s.getInputStream()));
+						for(String line = reader.readLine(); line != null; line = reader.readLine())
+							synchronized(messages)
+							{
+								messages.add(line);
+							}
+					}
+					catch(IOException e)
+					{
+						e.printStackTrace();
+					}
+				}
+			}).start();
+			
+			//s.close();
 		}
 		catch(Throwable e)
 		{
 			e.printStackTrace();
+		}
+	}
+	
+	private void start()
+	{
+		//read the username and send it to the server
+		System.out.print("Username: ");
+		
+		String username = null;
+		while(username == null)
+			username = readInput();
+		
+		write(username);
+		
+		//process and show server messages
+		String message = null;
+		String input = null;
+		while(true)
+		{
+			//process server messages
+			while((message = read()) != null)
+			{
+				if(message.startsWith("@")) //it's a game state
+				{
+					//@<player>|<board> <turn>|<commands>
+					//@b|32chars b|<commands>, commands start at 39, turn is char 37
+					boolean black = message.charAt(1) == 'b';
+					boolean turn = message.charAt(1) == message.charAt(37);
+					String commands = message.substring(39);
+					String board = message.substring(4, 36);
+					
+					//set up the display
+					String[] display = new String[10];
+					for(int i = 0; i < 8; i++)
+						display[i] = "" + (8 - i);
+					display[8] = " ABCDEFGH";
+					display[9] = "Commands: " + commands;
+					
+					//add the board to the display
+					int i = 0;
+					for(int y = 0; y < 8; y++)
+						for(int x = 0; x < 8; x++)
+							display[y] += (x & 1) == (y & 1) ? " " : board.charAt(i++);
+					
+					//add the player color
+					display[0] += black ? " You are black." : " You are white.";
+					
+					//add turn/who won
+					display[1] += turn ? " It is your turn." : message.charAt(37) == 'B' ? " Black won." : message.charAt(37) == 'W' ? " White won." : "";
+					
+					//print the text
+					for(i = 0; i < display.length; i++)
+						System.out.println(display[i]);
+				}
+				else //not a game state
+					System.out.println("Commands: " + message);
+			}
+			
+			//process user input
+			while((input = readInput()) != null)
+			{
+				//just send it to the server
+				write(input);
+			}
+			
+			//sleep for a bit
+			try
+			{
+				Thread.sleep(100);
+			}
+			catch(Throwable e)
+			{
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	private String read()
+	{
+		synchronized(messages)
+		{
+			return messages.poll();
+		}
+	}
+	
+	public void write(String s)
+	{
+		writer.println(s);
+	}
+	
+	public String readInput()
+	{
+		synchronized(inputs)
+		{
+			return inputs.poll();
 		}
 	}
 }
@@ -52,7 +196,7 @@ class CheckersServer
 	{
 		try
 		{
-			new CheckersServer().start();
+			(args.length > 0 ? new CheckersServer(Integer.parseInt(args[0])) : new CheckersServer()).start();
 		}
 		catch(IOException e)
 		{
@@ -62,7 +206,12 @@ class CheckersServer
 	
 	private CheckersServer() throws IOException
 	{
-		ss = new ServerSocket(28000);
+		this(28000);
+	}
+	
+	private CheckersServer(int port) throws IOException
+	{
+		ss = new ServerSocket(port);
 		lobby = new ArrayList<Player>();
 		games = new ArrayList<Game>();
 	}
@@ -79,7 +228,11 @@ class CheckersServer
 				Socket s = ss.accept();
 				Player p = new Player(s);
 				new Thread(p).start();
-				lobby.add(p);
+				synchronized(lobby)
+				{
+					lobby.add(p);
+					lobbyUpdate = true;
+				}
 			}
 			catch(IOException e)
 			{
@@ -112,9 +265,8 @@ class CheckersServer
 								{
 									lobbyUpdate = true;
 									lobby.remove(p);
-									Game g = new Game();
+									Game g = new Game(p);
 									games.add(g);
-									g.addPlayer(p);
 									new Thread(g).start(); //start handling input from the player while waiting for a second player
 									break;
 								}
@@ -234,13 +386,19 @@ class CheckersServer
 						name = "nameless";
 				}
 				for(line = reader.readLine(); line != null && !line.equals("exit"); line = reader.readLine())
-					messages.add(line);
+					synchronized(this)
+					{
+						messages.add(line);
+					}
 			}
 			catch(IOException e)
 			{
 				e.printStackTrace();
 			}
-			messages.add("exit");
+			synchronized(this)
+			{
+				messages.add("exit");
+			}
 		}
 	}
 	
@@ -250,10 +408,13 @@ class CheckersServer
 		private Player b;
 		private Board board;
 		private String name;
+		private boolean running;
 		
-		public Game()
+		public Game(Player p)
 		{
 			board = new Board();
+			addPlayer(p);
+			name = p.getName() + "'s Game";
 		}
 		
 		private class Board
@@ -264,21 +425,21 @@ class CheckersServer
 			public static final byte KING = 2; //010 (also used as invalid)
 			
 			private byte[][] board;
-			boolean turn; //false white, true black
-			int last; //last turn, if was a jump, used to force multiple jumps
+			private boolean turn; //false white, true black
+			private int last; //last turn, if was a jump, used to force multiple jumps
 			
 			public Board()
 			{
-				board = new byte[8][8];
+				board = new byte[8][8]; //[0,0] is invalid, [0,1] is black pawn, [7, 7] is invalid, [7, 6] is white pawn
 				for(int y = 0; y < 8; y++)
-					for(int x = (y & 1) == 0 ? 1 : 0; x < 8; x += 2) //every other tile, alternates even/odd to get the checkerboard pattern
-						board[x][y] = y < 4 ? BLACK : y > 5 ? WHITE : KING; //y=0 is the top, black is top white is bottom (like in chess), off tiles are marked invalid with KING
+					for(int x = 0; x < 8; x ++)
+						board[x][y] = (x + y & 1) == 0 ? KING : y < 3 ? BLACK : y > 4 ? WHITE : EMPTY; //y=0 is the top, black is top white is bottom (like in chess), off tiles are marked invalid with KING
 				
 				turn = true; //black is first to move for some reason, should be white like chess
 				last = 0;
 			}
 			
-			public int get(int x, int y)
+			public byte get(int x, int y)
 			{
 				if(x < 0 || x >= 8 || y < 0 || y >= 8)
 					return KING; //invalid location
@@ -287,11 +448,12 @@ class CheckersServer
 			
 			public byte getColor(int x, int y)
 			{
-				if((get(x, y) & BLACK) == BLACK)
+				byte piece = get(x, y);
+				if((piece & BLACK) == BLACK)
 					return BLACK;
-				if((get(x, y) & WHITE) == WHITE)
+				if((piece & WHITE) == WHITE)
 					return WHITE;
-				return KING;
+				return piece; //KING if invalid, EMPTY if empty
 			}
 			
 			public boolean isKing(int x, int y)
@@ -299,14 +461,17 @@ class CheckersServer
 				return get(x, y) != KING && (get(x, y) & KING) == KING;
 			}
 			
-			public List<Integer> getMoves()
+			public List<Integer> getMoves() //0x20(destY)(destX)(sourY)(sourX)
 			{
 				List<Integer> moves = new ArrayList<Integer>();
 				
+				if(!running) //if game is over just return no moves
+					return moves;
+				
 				if(last != 0) //check for double jumping
 				{
-					int x = last % 8;
-					int y = (last >> 3) % 8;
+					int x = last & 7;
+					int y = (last >> 3) & 7;
 					
 					if(turn)
 					{
@@ -417,55 +582,210 @@ class CheckersServer
 				return moves;
 			}
 			
-			public void doMove(int move)
+			public boolean doMove(int move) //returns if the move was valid
 			{
-				//do the move
-				if(getMoves().contains(move)) //is a valid move
+				if(!getMoves().contains(move)) //isn't a valid move
+					return false;
+				
+				//figure out what the move actually is
+				int x1 = move & 7;
+				int y1 = (move >> 3) & 7;
+				int x2 = (move >> 6) & 7;
+				int y2 = (move >> 9) & 7;
+				boolean king = isKing(x1, y1) || y2 == 0 || y2 == 7; //is a king already, or will become a king
+				
+				//remove anything at the start and inbetween (for jumps)
+				board[x1][y1] = EMPTY;
+				board[(x1 + x2) / 2][(y1 + y2) / 2] = EMPTY;
+				
+				//put the peice where it moved to
+				board[x2][y2] = (byte)((turn ? BLACK : WHITE) | (king ? KING : EMPTY));
+				
+				//reset the last jump position
+				last = 0;
+				
+				if(x1 + 1 < x2 || x1 - 1 > x2) //it was a jump
 				{
-					//figure out what the move actually is
-					int x1 = move % 8;
-					int y1 = (move >> 3) % 8;
-					int x2 = (move >> 6) % 8;
-					int y2 = (move >> 9) % 8;
-					boolean king = isKing(x1, y1) || y2 == 0 || y2 == 7; //is a king already, or will become a king
-					
-					//remove anything at the start and inbetween (for jumps)
-					board[x1][y1] = EMPTY;
-					board[(x1 + x2) / 2][(y1 + y2) / 2] = EMPTY;
-					
-					//put the peice where it moved to
-					board[x2][y2] = (byte)((turn ? BLACK : WHITE) | (king ? KING : EMPTY));
-					
-					//reset the last jump position
-					last = 0;
-					
-					if(x1 + 1 < x2 || x1 - 1 > x2) //it was a jump
+					last = x2 + (y2 << 3); //set the jump position
+					if(getMoves().isEmpty()) //can't do more jumps
 					{
-						last = x2 + (y2 << 3); //set the jump position
-						if(getMoves().isEmpty()) //can't do more jumps
-						{
-							last = 0; //reset the last jump position
-							turn = !turn; //flip the turn and continue
-						}
+						last = 0; //reset the last jump position
+						turn = !turn; //flip the turn and continue
 					}
-					else //just a normal move, flip the turn
-						turn = !turn;
 				}
+				else //just a normal move, flip the turn
+					turn = !turn;
+				
+				return true;
 			}
 			
-			public void update(Player a, Player b)
+			public void update(Player A, Player B) //@<player>|<board> <turn>|commands
 			{
+				//@ designates the game is being played, b/w tells the player which side they are
+				String aBase = "@b|";
+				String bBase = "@w|";
+				String base = "";
 				
+				//pack the board
+				String[] decode = {".", "1", "2", "3", "w", "b", "W", "B"}; //123 shouldn't be used
+				for(int y = 0; y < 8; y++)
+					for(int x = y & 1 ^ 1; x < 8; x += 2)
+						base += decode[get(x, y)];
+				
+				//add the turn
+				base += " " + (getMoves().size() > 0 ? turn ? "b|" : "w|" : turn ? "W|" : "B|"); //if black is out of moves, white wins
+				
+				//list of possible moves
+				String[] rows = {"8", "7", "6", "5", "4", "3", "2", "1"};
+				String[] cols = {"A", "B", "C", "D", "E", "F", "G", "H"};
+				List<Integer> movesList = getMoves();
+				String moves = "";
+				
+				if(movesList.size() > 0)
+					moves += cols[movesList.get(0) & 7] + rows[movesList.get(0) >> 3 & 7] + " " + cols[movesList.get(0) >> 6 & 7] + rows[movesList.get(0) >> 9 & 7];
+				else
+					running = false; //no moves left, end the game
+				for(int i = 1; i < movesList.size(); i++)
+					moves += "," + cols[movesList.get(i) & 7] + rows[movesList.get(i) >> 3 & 7] + " " + cols[movesList.get(i) >> 6 & 7] + rows[movesList.get(i) >> 9 & 7];
+				moves += "|";
+				
+				//base actions
+				String actions = "quit|exit";
+				
+				//update a
+				if(A != null)
+					A.write(aBase + base + (turn ? moves : "") + actions);
+				
+				//update b
+				if(B != null)
+					B.write(bBase + base + (turn ? "" : moves) + actions);
+			}
+			
+			public void process(Player A, Player B)
+			{
+				if(turn) //black's turn, process black first
+				{
+					for(String s = B.read(); s != null; s = B.read())
+						if(s.equals("quit"))
+						{
+							running = false;
+							turn = true;
+							b = null;
+							synchronized(lobby)
+							{
+								lobby.add(B);
+								lobbyUpdate = true;
+							}
+							break;
+						}
+						else
+							if(s.equals("exit"))
+							{
+								running = false;
+								turn = true;
+								b = null;
+								break;
+							}
+							else
+								if(s.matches("[A-H][1-8] [A-H][1-8]"))
+								{
+									String rows = "87654321";
+									String cols = "ABCDEFGH";
+									if(doMove(rows.indexOf(s.charAt(0)) + (cols.indexOf(s.charAt(1)) << 3) + (rows.indexOf(s.charAt(3)) << 6) + (cols.indexOf(s.charAt(4)) << 9)));
+										update(A, B); //only update if the move happens
+								}
+					
+					for(String s = A.read(); s != null; s = A.read())
+						if(s.equals("quit"))
+						{
+							running = false;
+							turn = false;
+							a = null;
+							synchronized(lobby)
+							{
+								lobby.add(A);
+								lobbyUpdate = true;
+							}
+							break;
+						}
+						else
+							if(s.equals("exit"))
+							{
+								running = false;
+								turn = false;
+								a = null;
+								break;
+							}
+				}
+				else //white's turn
+				{
+					for(String s = A.read(); s != null; s = A.read())
+						if(s.equals("quit"))
+						{
+							running = false;
+							turn = false;
+							a = null;
+							synchronized(lobby)
+							{
+								lobby.add(A);
+								lobbyUpdate = true;
+							}
+							break;
+						}
+						else
+							if(s.equals("exit"))
+							{
+								running = false;
+								turn = false;
+								a = null;
+								break;
+							}
+							else
+								if(s.matches("[A-H][1-8] [A-H][1-8]"))
+								{
+									String rows = "87654321";
+									String cols = "ABCDEFGH";
+									if(doMove(rows.indexOf(s.charAt(0)) + (cols.indexOf(s.charAt(1)) << 3) + (rows.indexOf(s.charAt(3)) << 6) + (cols.indexOf(s.charAt(4)) << 9)));
+										update(A, B); //only update if the move happens
+								}
+					
+					for(String s = B.read(); s != null; s = B.read())
+						if(s.equals("quit"))
+						{
+							running = false;
+							turn = true;
+							b = null;
+							synchronized(lobby)
+							{
+								lobby.add(B);
+								lobbyUpdate = true;
+							}
+							break;
+						}
+						else
+							if(s.equals("exit"))
+							{
+								running = false;
+								turn = true;
+								b = null;
+								break;
+							}
+				}
 			}
 		}
 		
 		public boolean addPlayer(Player p)
 		{
 			if(a == null && b == null && (name = p.getName()) != null) //randomly put in the first player and set the lobby name
+			{
 				if(Math.random() < 0.5)
 					a = p;
 				else
 					b = p;
+				
+				//tell the player what commands are available
+				p.write("black|red|quit|exit");
+			}
 			else
 				if(a == null) //fill in the second player
 					a = p;
@@ -503,7 +823,7 @@ class CheckersServer
 					}
 					
 					for(String s = p.read(); s != null; s = p.read())
-						if(s.equals("back"))
+						if(s.equals("quit"))
 						{
 							lobby.add(p); //return p to the lobby
 							games.remove(this);
@@ -541,9 +861,73 @@ class CheckersServer
 					e.printStackTrace();
 				}
 			}
-			while(true) //game running loop
+			
+			while(running) //game running loop
 			{
-				board.update(a, b);
+				board.process(a, b);
+				
+				//sleep for a bit
+				try
+				{
+					Thread.sleep(100);
+				}
+				catch(InterruptedException e)
+				{
+					e.printStackTrace();
+				}
+			}
+			
+			board.update(a, b);
+			
+			while(a != null || b != null) //post game screen
+			{
+				if(a != null)
+					for(String s = a.read(); s != null; s = a.read())
+						if(s.equals("quit"))
+						{
+							synchronized(lobby)
+							{
+								lobby.add(a);
+								lobbyUpdate = true;
+							}
+							a = null;
+							break;
+						}
+						else
+							if(s.equals("exit"))
+							{
+								a = null;
+								break;
+							}
+				
+				if(b != null)
+					for(String s = b.read(); s != null; s = b.read())
+						if(s.equals("quit"))
+						{
+							synchronized(lobby)
+							{
+								lobby.add(b);
+								lobbyUpdate = true;
+							}
+							b = null;
+							break;
+						}
+						else
+							if(s.equals("exit"))
+							{
+								b = null;
+								break;
+							}
+				
+				//sleep for a bit
+				try
+				{
+					Thread.sleep(100);
+				}
+				catch(InterruptedException e)
+				{
+					e.printStackTrace();
+				}
 			}
 		}
 	}
