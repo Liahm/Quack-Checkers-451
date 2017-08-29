@@ -110,11 +110,11 @@ class Checkers
 				if(message.startsWith("@")) //it's a game state
 				{
 					//@<player>|<board> <turn>|<commands>
-					//@b|32chars b|<commands>, commands start at 39, turn is char 37
+					//@b|32chars b|<commands>, commands start at 38, turn is char 37
 					boolean black = message.charAt(1) == 'b';
-					boolean turn = message.charAt(1) == message.charAt(37);
-					String commands = message.substring(39);
-					String board = message.substring(4, 36);
+					boolean turn = message.charAt(1) == message.charAt(36);
+					String commands = message.substring(38);
+					String board = message.substring(3, 35);
 					
 					//set up the display
 					String[] display = new String[10];
@@ -148,6 +148,8 @@ class Checkers
 			{
 				//just send it to the server
 				write(input);
+				if(input.equals("exit"))
+					System.exit(0);
 			}
 			
 			//sleep for a bit
@@ -250,8 +252,9 @@ class CheckersServer
 				synchronized(lobby)
 				{
 					//loop through players and read their commands
-					for(Player p : lobby)
+					for(int i = lobby.size() - 1; i >= 0; i--)
 					{
+						Player p = lobby.get(i);
 						readLoop: for(String s = p.read(); s != null; s = p.read())
 						{
 							//check if the player exits
@@ -283,7 +286,7 @@ class CheckersServer
 									else
 										if(s.matches("^join \\w{1,8}$"))
 										{
-											String name = s.substring(5);
+											String name = s.substring(5) + "'s Game";
 											
 											for(Game g : games)
 												if(g.getName().equals(name))
@@ -388,16 +391,19 @@ class CheckersServer
 				for(line = reader.readLine(); line != null && !line.equals("exit"); line = reader.readLine())
 					synchronized(this)
 					{
+						System.out.println(getName() + ": " + line);
 						messages.add(line);
 					}
+				synchronized(this)
+				{
+					System.out.println(getName() + " exited");
+					messages.add("exit");
+				}
+				socket.close();
 			}
 			catch(IOException e)
 			{
 				e.printStackTrace();
-			}
-			synchronized(this)
-			{
-				messages.add("exit");
 			}
 		}
 	}
@@ -473,7 +479,7 @@ class CheckersServer
 					int x = last & 7;
 					int y = (last >> 3) & 7;
 					
-					if(turn)
+					if(!turn)
 					{
 						if(getColor(x, y) == WHITE)
 						{
@@ -510,7 +516,7 @@ class CheckersServer
 				{
 					for(int x = 0; x < 8; x++)
 						for(int y = 0; y < 8; y++)
-							if(turn)
+							if(!turn)
 							{
 								if(getColor(x, y) == WHITE)
 								{
@@ -545,7 +551,7 @@ class CheckersServer
 					if(moves.isEmpty()) //if no jumps are forced, then look at the remaining moves
 						for(int x = 0; x < 8; x++)
 							for(int y = 0; y < 8; y++)
-								if(turn)
+								if(!turn)
 								{
 									if(getColor(x, y) == WHITE)
 									{
@@ -584,6 +590,11 @@ class CheckersServer
 			
 			public boolean doMove(int move) //returns if the move was valid
 			{
+				System.out.println("attempting move: " + move);
+				String m = "";
+				for(int i : getMoves())
+					m += i + ",";
+				System.out.println("valid moves: " + m);
 				if(!getMoves().contains(move)) //isn't a valid move
 					return false;
 				
@@ -640,14 +651,20 @@ class CheckersServer
 				String[] cols = {"A", "B", "C", "D", "E", "F", "G", "H"};
 				List<Integer> movesList = getMoves();
 				String moves = "";
+				System.out.println(movesList.size());
 				
 				if(movesList.size() > 0)
 					moves += cols[movesList.get(0) & 7] + rows[movesList.get(0) >> 3 & 7] + " " + cols[movesList.get(0) >> 6 & 7] + rows[movesList.get(0) >> 9 & 7];
 				else
+				{
+					moves += "<EMPTY>";
 					running = false; //no moves left, end the game
+				}
 				for(int i = 1; i < movesList.size(); i++)
 					moves += "," + cols[movesList.get(i) & 7] + rows[movesList.get(i) >> 3 & 7] + " " + cols[movesList.get(i) >> 6 & 7] + rows[movesList.get(i) >> 9 & 7];
 				moves += "|";
+				
+				System.out.println(moves);
 				
 				//base actions
 				String actions = "quit|exit";
@@ -663,7 +680,7 @@ class CheckersServer
 			
 			public void process(Player A, Player B)
 			{
-				if(turn) //black's turn, process black first
+				if(!turn) //black's turn, process black first
 				{
 					for(String s = B.read(); s != null; s = B.read())
 						if(s.equals("quit"))
@@ -689,9 +706,10 @@ class CheckersServer
 							else
 								if(s.matches("[A-H][1-8] [A-H][1-8]"))
 								{
+									System.out.println("valid move format: " + s);
 									String rows = "87654321";
 									String cols = "ABCDEFGH";
-									if(doMove(rows.indexOf(s.charAt(0)) + (cols.indexOf(s.charAt(1)) << 3) + (rows.indexOf(s.charAt(3)) << 6) + (cols.indexOf(s.charAt(4)) << 9)));
+									if(doMove(cols.indexOf(s.charAt(0)) + (rows.indexOf(s.charAt(1)) << 3) + (cols.indexOf(s.charAt(3)) << 6) + (rows.indexOf(s.charAt(4)) << 9)));
 										update(A, B); //only update if the move happens
 								}
 					
@@ -743,9 +761,10 @@ class CheckersServer
 							else
 								if(s.matches("[A-H][1-8] [A-H][1-8]"))
 								{
+									System.out.println("valid move format: " + s);
 									String rows = "87654321";
 									String cols = "ABCDEFGH";
-									if(doMove(rows.indexOf(s.charAt(0)) + (cols.indexOf(s.charAt(1)) << 3) + (rows.indexOf(s.charAt(3)) << 6) + (cols.indexOf(s.charAt(4)) << 9)));
+									if(doMove(cols.indexOf(s.charAt(0)) + (rows.indexOf(s.charAt(1)) << 3) + (cols.indexOf(s.charAt(3)) << 6) + (rows.indexOf(s.charAt(4)) << 9)));
 										update(A, B); //only update if the move happens
 								}
 					
@@ -861,6 +880,12 @@ class CheckersServer
 					e.printStackTrace();
 				}
 			}
+			
+			//set the game to running
+			running = true;
+			
+			//update the players with the initial board
+			board.update(a, b);
 			
 			while(running) //game running loop
 			{

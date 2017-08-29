@@ -133,7 +133,7 @@ class Checkers
 					display[0] += black ? " You are black." : " You are white.";
 					
 					//add turn/who won
-					display[1] += turn ? " It is your turn." : message.charAt(37) == 'B' ? " Black won." : message.charAt(37) == 'W' ? " White won." : "";
+					display[1] += turn ? " It is your turn." : message.charAt(36) == 'B' ? " Black won." : message.charAt(36) == 'W' ? " White won." : "";
 					
 					//print the text
 					for(i = 0; i < display.length; i++)
@@ -644,7 +644,7 @@ class CheckersServer
 						base += decode[get(x, y)];
 				
 				//add the turn
-				base += " " + (getMoves().size() > 0 ? turn ? "b|" : "w|" : turn ? "W|" : "B|"); //if black is out of moves, white wins
+				base += " " + (getMoves().size() > 0 ? turn ? "b|" : "w|" : turn ? "B|" : "W|"); //if black is out of moves, white wins
 				
 				//list of possible moves
 				String[] rows = {"8", "7", "6", "5", "4", "3", "2", "1"};
@@ -671,11 +671,11 @@ class CheckersServer
 				
 				//update a
 				if(A != null)
-					A.write(aBase + base + (turn ? moves : "") + actions);
+					A.write(aBase + base + (!running ? "" : turn ? moves : "") + actions);
 				
 				//update b
 				if(B != null)
-					B.write(bBase + base + (turn ? "" : moves) + actions);
+					B.write(bBase + base + (!running ? "" : turn ? "" : moves) + actions);
 			}
 			
 			public void process(Player A, Player B)
@@ -803,7 +803,7 @@ class CheckersServer
 					b = p;
 				
 				//tell the player what commands are available
-				p.write("black|red|quit|exit");
+				p.write("black|white|quit|exit"); //was red, now is white
 			}
 			else
 				if(a == null) //fill in the second player
@@ -863,7 +863,7 @@ class CheckersServer
 									b = null;
 								}
 								else
-									if(s.equals("red"))
+									if(s.equals("white")) //was red, now is white
 									{
 										b = p;
 										a = null;
